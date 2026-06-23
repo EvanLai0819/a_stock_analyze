@@ -714,40 +714,88 @@ class NotificationService:
             
             # ========== 舆情与基本面概览（放在最前面）==========
             intel = dashboard.get('intelligence', {}) if dashboard else {}
-            if intel:
+            
+            # 行业资金流向（新增）
+            context = result.context if hasattr(result, 'context') else {}
+            industry_moneyflow = context.get('industry_moneyflow', {}) if context else {}
+            
+            if intel or industry_moneyflow:
                 report_lines.extend([
                     "### 📰 重要信息速览",
                     "",
                 ])
                 
-                # 舆情情绪总结
-                if intel.get('sentiment_summary'):
-                    report_lines.append(f"**💭 舆情情绪**: {intel['sentiment_summary']}")
-                
-                # 业绩预期
-                if intel.get('earnings_outlook'):
-                    report_lines.append(f"**📊 业绩预期**: {intel['earnings_outlook']}")
-                
-                # 风险警报（醒目显示）
-                risk_alerts = intel.get('risk_alerts', [])
-                if risk_alerts:
+                # 行业资金流向（优先显示）
+                if industry_moneyflow:
+                    industry_name = industry_moneyflow.get('industry_name', '未知')
+                    net_amount = industry_moneyflow.get('net_amount', 0)
+                    net_buy = industry_moneyflow.get('net_buy_amount', 0)
+                    net_sell = industry_moneyflow.get('net_sell_amount', 0)
+                    industry_rank = industry_moneyflow.get('industry_rank', 0)
+                    total_industries = industry_moneyflow.get('total_industries', 90)
+                    lead_stock = industry_moneyflow.get('lead_stock', '')
+                    
+                    # 资金流向状态判断
+                    flow_status = ""
+                    flow_emoji = ""
+                    if net_amount > 10:
+                        flow_status = "大幅流入"
+                        flow_emoji = "✅"
+                    elif net_amount > 5:
+                        flow_status = "净流入"
+                        flow_emoji = "✅"
+                    elif net_amount > 0:
+                        flow_status = "微幅流入"
+                        flow_emoji = "✅"
+                    elif net_amount > -5:
+                        flow_status = "净流出"
+                        flow_emoji = "⚠️"
+                    else:
+                        flow_status = "大幅流出"
+                        flow_emoji = "⚠️"
+                    
+                    report_lines.append(f"**🏭 行业资金流向** ({industry_name}):")
+                    report_lines.append(f"  - 净流入: **{net_amount:.2f}亿** {flow_emoji}{flow_status}")
+                    if net_buy > 0 or net_sell > 0:
+                        report_lines.append(f"  - 净买入: {net_buy:.2f}亿 | 净卖出: {net_sell:.2f}亿")
+                    if industry_rank > 0:
+                        rank_ratio = industry_rank / total_industries
+                        rank_status = "排名靠前" if rank_ratio <= 0.2 else ("排名靠后" if rank_ratio >= 0.8 else "排名中等")
+                        rank_emoji = "✅" if rank_ratio <= 0.2 else ("⚠️" if rank_ratio >= 0.8 else "")
+                        report_lines.append(f"  - 行业排名: 第{industry_rank}名/{total_industries} {rank_emoji}{rank_status}")
+                    if lead_stock:
+                        report_lines.append(f"  - 领涨股: {lead_stock}")
                     report_lines.append("")
-                    report_lines.append("**🚨 风险警报**:")
-                    for alert in risk_alerts:
-                        report_lines.append(f"- {alert}")
                 
-                # 利好催化
-                catalysts = intel.get('positive_catalysts', [])
-                if catalysts:
-                    report_lines.append("")
-                    report_lines.append("**✨ 利好催化**:")
-                    for cat in catalysts:
-                        report_lines.append(f"- {cat}")
-                
-                # 最新消息
-                if intel.get('latest_news'):
-                    report_lines.append("")
-                    report_lines.append(f"**📢 最新动态**: {intel['latest_news']}")
+                if intel:
+                    # 舆情情绪总结
+                    if intel.get('sentiment_summary'):
+                        report_lines.append(f"**💭 舆情情绪**: {intel['sentiment_summary']}")
+                    
+                    # 业绩预期
+                    if intel.get('earnings_outlook'):
+                        report_lines.append(f"**📊 业绩预期**: {intel['earnings_outlook']}")
+                    
+                    # 风险警报（醒目显示）
+                    risk_alerts = intel.get('risk_alerts', [])
+                    if risk_alerts:
+                        report_lines.append("")
+                        report_lines.append("**🚨 风险警报**:")
+                        for alert in risk_alerts:
+                            report_lines.append(f"- {alert}")
+                    
+                    # 利好催化
+                    catalysts = intel.get('positive_catalysts', [])
+                    if catalysts:
+                        report_lines.append("")
+                        report_lines.append("**✨ 利好催化**:")
+                        for cat in catalysts:
+                            report_lines.append(f"- {cat}")
+                    
+                    # 最新消息
+                    if intel.get('latest_news'):
+                        report_lines.append("")
+                        report_lines.append(f"**📢 最新动态**: {intel['latest_news']}")
                 
                 report_lines.append("")
             
@@ -1172,8 +1220,52 @@ class NotificationService:
                 "",
             ])
         
-        # 重要信息（舆情+基本面）
+        # 重要信息（舆情+基本面+行业资金流向）
         info_added = False
+        
+        # 行业资金流向（新增）
+        context = result.context if hasattr(result, 'context') else {}
+        industry_moneyflow = context.get('industry_moneyflow', {}) if context else {}
+        
+        if industry_moneyflow:
+            if not info_added:
+                lines.append("### 📰 重要信息")
+                lines.append("")
+                info_added = True
+            
+            industry_name = industry_moneyflow.get('industry_name', '未知')
+            net_amount = industry_moneyflow.get('net_amount', 0)
+            net_buy = industry_moneyflow.get('net_buy_amount', 0)
+            net_sell = industry_moneyflow.get('net_sell_amount', 0)
+            industry_rank = industry_moneyflow.get('industry_rank', 0)
+            total_industries = industry_moneyflow.get('total_industries', 90)
+            lead_stock = industry_moneyflow.get('lead_stock', '')
+            
+            # 资金流向状态判断
+            flow_status = ""
+            if net_amount > 10:
+                flow_status = "大幅流入 ✅"
+            elif net_amount > 5:
+                flow_status = "净流入 ✅"
+            elif net_amount > 0:
+                flow_status = "微幅流入 ✅"
+            elif net_amount > -5:
+                flow_status = "净流出 ⚠️"
+            else:
+                flow_status = "大幅流出 ⚠️"
+            
+            lines.append(f"🏭 **行业资金流向** ({industry_name}):")
+            lines.append(f"  - 净流入: **{net_amount:.2f}亿** ({flow_status})")
+            if net_buy > 0 or net_sell > 0:
+                lines.append(f"  - 净买入: {net_buy:.2f}亿 | 净卖出: {net_sell:.2f}亿")
+            if industry_rank > 0:
+                rank_ratio = industry_rank / total_industries
+                rank_status = "排名靠前 ✅" if rank_ratio <= 0.2 else ("排名靠后 ⚠️" if rank_ratio >= 0.8 else "排名中等")
+                lines.append(f"  - 行业排名: 第{industry_rank}名/{total_industries} ({rank_status})")
+            if lead_stock:
+                lines.append(f"  - 领涨股: {lead_stock}")
+            lines.append("")
+        
         if intel:
             if intel.get('earnings_outlook'):
                 if not info_added:

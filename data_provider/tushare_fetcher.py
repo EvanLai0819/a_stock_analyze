@@ -759,6 +759,495 @@ class TushareFetcher(BaseFetcher):
         # Tushare 获取板块数据较复杂，暂时返回 None，让 AkShare 处理
         return None
 
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """
+        Get north-bound capital flow data using Tushare Pro API.
+        
+        Tushare API: moneyflow_hsgt()
+        
+        Returns:
+            Dict with keys:
+                - north_net_flow: Net flow amount (billion CNY)
+                - north_buy_amount: Buy amount (billion CNY)
+                - north_sell_amount: Sell amount (billion CNY)
+                - date: Date string
+        """
+        if not self._api:
+            return None
+        
+        try:
+            logger.info("[API调用] Tushare moneyflow_hsgt() 获取北向资金...")
+            
+            # Get money flow data for the last 5 days
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - pd.Timedelta(days=5)).strftime('%Y%m%d')
+            
+            df = self._api.moneyflow_hsgt(start_date=start_date, end_date=end_date)
+            
+            if df is not None and not df.empty:
+                # Filter for north-bound data (北向资金 = 沪股通 + 深股通)
+                # Sort by date and get the latest
+                df = df.sort_values('trade_date', ascending=False)
+                latest = df.iloc[0]
+                
+                # Calculate north-bound flow (north = sh + sz)
+                north_buy = float(latest.get('ggt_ss', 0) or 0) + float(latest.get('ggt_sz', 0) or 0)
+                north_sell = float(latest.get('buy_elg_vol', 0) or 0) + float(latest.get('buy_elg_vol_sz', 0) or 0)
+                north_net = north_buy - north_sell
+                
+                result = {
+                    'date': str(latest.get('trade_date', '')),
+                    'north_net_flow': north_net / 1e4,  # Convert to billion (Tushare unit: 万元)
+                    'north_buy_amount': north_buy / 1e4,
+                    'north_sell_amount': north_sell / 1e4,
+                }
+                
+                logger.info(f"[北向资金] 净流入: {result['north_net_flow']:.2f}亿")
+                return result
+                
+        except Exception as e:
+            logger.warning(f"[Tushare] 获取北向资金失败: {e}")
+        
+        return None
+
+    def get_individual_capital_flow(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get individual stock capital flow data using Tushare Pro API.
+        
+        Tushare API: moneyflow()
+        
+        Args:
+            stock_code: Stock code (6-digit)
+            
+        Returns:
+            Dict with keys:
+                - main_net_inflow: Main force net inflow (million CNY)
+                - retail_net_inflow: Retail net inflow (million CNY)
+                - super_net_inflow: Super large net inflow (million CNY)
+                - large_net_inflow: Large net inflow (million CNY)
+                - medium_net_inflow: Medium net inflow (million CNY)
+                - small_net_inflow: Small net inflow (million CNY)
+        """
+        if not self._api:
+            return None
+        
+        try:
+            # Convert code format (600519 -> 600519.SH)
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            logger.info(f"[API调用] Tushare moneyflow() 获取个股资金流向 {ts_code}...")
+            
+            # Get money flow data for the last 5 days
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - pd.Timedelta(days=5)).strftime('%Y%m%d')
+            
+            df = self._api.moneyflow(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            
+            if df is not None and not df.empty:
+                # Sort by date and get the latest
+                df = df.sort_values('trade_date', ascending=False)
+                latest = df.iloc[0]
+                
+                result = {
+                    'date': str(latest.get('trade_date', '')),
+                    'main_net_inflow': float(latest.get('buy_elg_vol', 0) or 0) - float(latest.get('sell_elg_vol', 0) or 0),  # 超大单净流入
+                    'retail_net_inflow': float(latest.get('buy_sm_vol', 0) or 0) - float(latest.get('sell_sm_vol', 0) or 0),  # 小单净流入
+                    'super_net_inflow': float(latest.get('buy_elg_vol', 0) or 0) - float(latest.get('sell_elg_vol', 0) or 0),  # 超大单
+                    'large_net_inflow': float(latest.get('buy_lg_vol', 0) or 0) - float(latest.get('sell_lg_vol', 0) or 0),    # 大单
+                    'medium_net_inflow': float(latest.get('buy_md_vol', 0) or 0) - float(latest.get('sell_md_vol', 0) or 0),  # 中单
+                    'small_net_inflow': float(latest.get('buy_sm_vol', 0) or 0) - float(latest.get('sell_sm_vol', 0) or 0),   # 小单
+                }
+                
+                logger.info(f"[资金流向] {stock_code} 主力净流入: {result['super_net_inflow']:.2f}万")
+                return result
+                
+        except Exception as e:
+            logger.warning(f"[Tushare] 获取个股资金流向失败 {stock_code}: {e}")
+        
+        return None
+
+    def get_top10_holders(self, stock_code: str, period: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get top 10 shareholders data using Tushare Pro API.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+            period: Reporting period (e.g., '20231231'), if None, get the latest
+        
+        Returns:
+            Dictionary containing top 10 shareholders data, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Convert code format (600519 -> 600519.SH)
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            # Get top 10 shareholders data
+            if period:
+                df = self._api.top10_holders(ts_code=ts_code, period=period)
+            else:
+                df = self._api.top10_holders(ts_code=ts_code)
+            
+            if df is None or df.empty:
+                logger.warning(f"No top 10 holders data found for {stock_code}")
+                return None
+            
+            # Get the latest period data
+            latest = df.iloc[0]
+            
+            # Extract shareholder information
+            holders = []
+            for _, row in df.iterrows():
+                holders.append({
+                    'holder_name': row.get('holder_name', ''),
+                    'hold_amount': row.get('hold_amount', 0),
+                    'hold_ratio': row.get('hold_ratio', 0),
+                    'change': row.get('hold_change', 0),  # Shareholding change
+                    'holder_type': row.get('holder_type', '')  # Shareholder type
+                })
+            
+            result = {
+                'ts_code': ts_code,
+                'period': latest.get('ann_date', ''),
+                'holders': holders
+            }
+            
+            logger.info(f"Successfully retrieved top 10 holders for {stock_code}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get top 10 holders for {stock_code}: {e}")
+            return None
+
+    def get_shareholder_number(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get shareholder number changes using Tushare Pro API.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing shareholder number data, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Convert code format
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            # Get shareholder number data
+            df = self._api.stk_holdernumber(ts_code=ts_code)
+            
+            if df is None or df.empty:
+                logger.warning(f"No shareholder number data found for {stock_code}")
+                return None
+            
+            # Get recent data (last 4 quarters)
+            recent_df = df.head(4)
+            
+            # Extract shareholder number changes
+            holder_numbers = []
+            for _, row in recent_df.iterrows():
+                holder_numbers.append({
+                    'end_date': row.get('end_date', ''),
+                    'holder_num': row.get('holder_num', 0),
+                    'holder_num_change': row.get('holder_num_change', 0)
+                })
+            
+            # Calculate trend (decreasing = chip concentration)
+            latest_num = holder_numbers[0]['holder_num'] if holder_numbers else 0
+            prev_num = holder_numbers[1]['holder_num'] if len(holder_numbers) > 1 else 0
+            
+            trend = 'concentrating' if latest_num < prev_num else 'dispersing'
+            
+            result = {
+                'ts_code': ts_code,
+                'holder_numbers': holder_numbers,
+                'trend': trend,
+                'latest_holder_num': latest_num
+            }
+            
+            logger.info(f"Successfully retrieved shareholder number for {stock_code}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get shareholder number for {stock_code}: {e}")
+            return None
+
+    def get_broker_forecast(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get broker earnings forecast data using Tushare Pro API.
+        Note: This requires 10000 points or special permission.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing broker forecast data, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Convert code format
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            # Get broker forecast data (report_rc interface)
+            df = self._api.report_rc(ts_code=ts_code)
+            
+            if df is None or df.empty:
+                logger.warning(f"No broker forecast data found for {stock_code}")
+                return None
+            
+            # Get recent forecasts
+            recent_df = df.head(10)
+            
+            # Extract forecast information
+            forecasts = []
+            for _, row in recent_df.iterrows():
+                forecasts.append({
+                    'report_date': row.get('report_date', ''),
+                    'broker': row.get('research_inst', ''),
+                    'rating': row.get('rating', ''),  # e.g., '买入', '增持'
+                    'target_price': row.get('target_price', 0),
+                    'eps_forecast': row.get('eps', 0),  # EPS forecast
+                    'pe_forecast': row.get('pe', 0)  # PE forecast
+                })
+            
+            result = {
+                'ts_code': ts_code,
+                'forecasts': forecasts,
+                'forecast_count': len(forecasts)
+            }
+            
+            logger.info(f"Successfully retrieved broker forecast for {stock_code}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get broker forecast for {stock_code}: {e}")
+            return None
+
+    def get_industry_info(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get industry classification information using Tushare Pro API.
+        Note: This requires 5000 points for ci_index_member.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing industry information, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Convert code format
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            # Get industry classification using ci_index_member
+            df = self._api.ci_index_member(ts_code=ts_code)
+            
+            if df is None or df.empty:
+                logger.warning(f"No industry info found for {stock_code}")
+                return None
+            
+            # Extract industry information
+            latest = df.iloc[0]
+            
+            result = {
+                'ts_code': ts_code,
+                'l1_code': latest.get('l1_code', ''),
+                'l1_name': latest.get('l1_name', ''),  # Primary industry
+                'l2_code': latest.get('l2_code', ''),
+                'l2_name': latest.get('l2_name', ''),  # Secondary industry
+                'l3_code': latest.get('l3_code', ''),
+                'l3_name': latest.get('l3_name', ''),  # Tertiary industry
+                'in_date': latest.get('in_date', ''),  # Inclusion date
+                'is_new': latest.get('is_new', '')  # Is latest
+            }
+            
+            logger.info(f"Successfully retrieved industry info for {stock_code}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get industry info for {stock_code}: {e}")
+            return None
+
+    def get_chip_distribution(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get chip distribution and win rate data using Tushare Pro API.
+        Note: This requires 10000 points or special permission.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing chip distribution data, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Convert code format
+            ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            
+            # Get chip performance data (cyq_perf interface)
+            df = self._api.cyq_perf(ts_code=ts_code)
+            
+            if df is None or df.empty:
+                logger.warning(f"No chip distribution data found for {stock_code}")
+                return None
+            
+            # Get recent data
+            recent_df = df.head(5)
+            
+            # Extract chip distribution information
+            chip_data = []
+            for _, row in recent_df.iterrows():
+                chip_data.append({
+                    'trade_date': row.get('trade_date', ''),
+                    'avg_cost': row.get('his_low', 0),  # Average cost
+                    'win_rate': row.get('win_rate', 0),  # Win rate
+                    'volume': row.get('volume', 0)
+                })
+            
+            result = {
+                'ts_code': ts_code,
+                'chip_data': chip_data,
+                'latest_avg_cost': chip_data[0]['avg_cost'] if chip_data else 0,
+                'latest_win_rate': chip_data[0]['win_rate'] if chip_data else 0
+            }
+            
+            logger.info(f"Successfully retrieved chip distribution for {stock_code}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get chip distribution for {stock_code}: {e}")
+            return None
+
+    def get_industry_moneyflow(self, industry_name: Optional[str] = None, trade_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get industry/sector money flow data using Tushare Pro API.
+        Note: This requires 6000 points for moneyflow_ind_ths.
+        
+        Args:
+            industry_name: Industry name (e.g., '医药生物'), if None, get all industries
+            trade_date: Trade date (YYYYMMDD), if None, get the latest
+        
+        Returns:
+            Dictionary containing industry money flow data, or None if failed
+        """
+        if not self._api:
+            logger.error("Tushare API not initialized")
+            return None
+        
+        try:
+            # Get industry money flow data
+            if trade_date:
+                df = self._api.moneyflow_ind_ths(trade_date=trade_date)
+            else:
+                # Get latest data (today)
+                today = datetime.now().strftime('%Y%m%d')
+                df = self._api.moneyflow_ind_ths(trade_date=today)
+            
+            if df is None or df.empty:
+                logger.warning(f"No industry money flow data found")
+                return None
+            
+            # Filter by industry name if specified
+            if industry_name:
+                df = df[df['industry'].str.contains(industry_name, na=False)]
+            
+            # Extract industry money flow information
+            industries = []
+            for _, row in df.iterrows():
+                industries.append({
+                    'industry': row.get('industry', ''),
+                    'ts_code': row.get('ts_code', ''),
+                    'close': row.get('close', 0),
+                    'pct_change': row.get('pct_change', 0),
+                    'company_num': row.get('company_num', 0),
+                    'net_buy_amount': row.get('net_buy_amount', 0),  # Inflow (billion CNY)
+                    'net_sell_amount': row.get('net_sell_amount', 0),  # Outflow (billion CNY)
+                    'net_amount': row.get('net_amount', 0),  # Net amount (billion CNY)
+                    'lead_stock': row.get('lead_stock', ''),  # Leading stock
+                    'pct_change_stock': row.get('pct_change_stock', 0)  # Leading stock change
+                })
+            
+            # Sort by net amount (descending)
+            industries = sorted(industries, key=lambda x: x['net_amount'], reverse=True)
+            
+            result = {
+                'trade_date': trade_date or today,
+                'industries': industries,
+                'industry_count': len(industries),
+                'top_inflow': industries[0] if industries else None,
+                'top_outflow': industries[-1] if industries else None
+            }
+            
+            logger.info(f"Successfully retrieved industry money flow data")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get industry money flow: {e}")
+            return None
+
+    def get_stock_industry_moneyflow(self, stock_code: str, fetcher_manager=None) -> Optional[Dict[str, Any]]:
+        """
+        Get money flow data for the industry that the stock belongs to.
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+            fetcher_manager: DataFetcherManager instance (optional, for fallback)
+        
+        Returns:
+            Dictionary containing industry money flow data for the stock's industry
+        """
+        # First get the industry info for the stock
+        industry_info = self.get_industry_info(stock_code)
+        
+        if not industry_info:
+            logger.warning(f"Cannot get industry info for {stock_code}")
+            return None
+        
+        # Get industry name (use secondary industry for more specific data)
+        industry_name = industry_info.get('l2_name', '')
+        
+        if not industry_name:
+            logger.warning(f"Cannot determine industry for {stock_code}")
+            return None
+        
+        # Get industry money flow data
+        moneyflow = self.get_industry_moneyflow(industry_name=industry_name)
+        
+        if not moneyflow:
+            return None
+        
+        # Find the specific industry data
+        for ind in moneyflow.get('industries', []):
+            if industry_name in ind['industry']:
+                result = {
+                    'stock_code': stock_code,
+                    'industry_name': industry_name,
+                    'industry_moneyflow': ind,
+                    'industry_rank': moneyflow['industries'].index(ind) + 1,
+                    'total_industries': moneyflow['industry_count']
+                }
+                logger.info(f"Successfully retrieved industry money flow for {stock_code}")
+                return result
+        
+        logger.warning(f"Industry {industry_name} not found in money flow data")
+        return None
+
 
 if __name__ == "__main__":
     # 测试代码

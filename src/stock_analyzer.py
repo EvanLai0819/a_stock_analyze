@@ -201,16 +201,20 @@ class StockTrendAnalyzer:
         """初始化分析器"""
         pass
     
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(self, df: pd.DataFrame, code: str, market_context: Optional[Dict] = None) -> TrendAnalysisResult:
         """
-        分析股票趋势
+        Analyze stock trend with market context.
         
         Args:
-            df: 包含 OHLCV 数据的 DataFrame
-            code: 股票代码
+            df: DataFrame with OHLCV data
+            code: Stock code
+            market_context: Market environment data (optional)
+                - market_trend: 'bull' / 'bear' / 'neutral'
+                - north_flow: North-bound capital flow (billion CNY)
+                - up_ratio: Ratio of rising stocks
             
         Returns:
-            TrendAnalysisResult 分析结果
+            TrendAnalysisResult: Analysis result
         """
         result = TrendAnalysisResult(code=code)
         
@@ -219,17 +223,17 @@ class StockTrendAnalyzer:
             result.risk_factors.append("数据不足，无法完成分析")
             return result
         
-        # 确保数据按日期排序
+        # Ensure data is sorted by date
         df = df.sort_values('date').reset_index(drop=True)
         
-        # 计算均线
+        # Calculate moving averages
         df = self._calculate_mas(df)
 
-        # 计算 MACD 和 RSI
+        # Calculate MACD and RSI
         df = self._calculate_macd(df)
         df = self._calculate_rsi(df)
 
-        # 获取最新数据
+        # Get latest data
         latest = df.iloc[-1]
         result.current_price = float(latest['close'])
         result.ma5 = float(latest['MA5'])
@@ -237,26 +241,26 @@ class StockTrendAnalyzer:
         result.ma20 = float(latest['MA20'])
         result.ma60 = float(latest.get('MA60', 0))
 
-        # 1. 趋势判断
+        # 1. Trend analysis
         self._analyze_trend(df, result)
 
-        # 2. 乖离率计算
+        # 2. Bias calculation
         self._calculate_bias(result)
 
-        # 3. 量能分析
+        # 3. Volume analysis
         self._analyze_volume(df, result)
 
-        # 4. 支撑压力分析
+        # 4. Support and resistance analysis
         self._analyze_support_resistance(df, result)
 
-        # 5. MACD 分析
+        # 5. MACD analysis
         self._analyze_macd(df, result)
 
-        # 6. RSI 分析
+        # 6. RSI analysis
         self._analyze_rsi(df, result)
 
-        # 7. 生成买入信号
-        self._generate_signal(result)
+        # 7. Generate buy signal with market context
+        self._generate_signal(result, market_context)
 
         return result
     
@@ -579,80 +583,168 @@ class StockTrendAnalyzer:
             result.rsi_status = RSIStatus.OVERSOLD
             result.rsi_signal = f"⭐ RSI超卖({rsi_mid:.1f}<30)，反弹机会大"
 
-    def _generate_signal(self, result: TrendAnalysisResult) -> None:
+    def _generate_signal(self, result: TrendAnalysisResult, market_context: Optional[Dict] = None) -> None:
         """
-        生成买入信号
+        Generate buy signal with improved scoring logic.
 
-        综合评分系统：
-        - 趋势（30分）：多头排列得分高
-        - 乖离率（20分）：接近 MA5 得分高
-        - 量能（15分）：缩量回调得分高
-        - 支撑（10分）：获得均线支撑得分高
-        - MACD（15分）：金叉和多头得分高
-        - RSI（10分）：超卖和强势得分高
+        Improved scoring system (more lenient and practical):
+        - Trend (25 points): Focus on trend direction, less penalty for consolidation
+        - Bias (20 points): Allow wider bias range
+        - Volume (20 points): Increased weight for volume analysis
+        - Support (10 points): Support level validation
+        - MACD (15 points): MACD signal strength
+        - RSI (10 points): RSI oversold/overbought
+        
+        Args:
+            result: Trend analysis result
+            market_context: Market environment data (optional)
+                - market_trend: 'bull' / 'bear' / 'neutral'
+                - north_flow: North-bound capital flow (billion CNY)
+                - up_ratio: Ratio of rising stocks
         """
         score = 0
         reasons = []
         risks = []
 
-        # === 趋势评分（30分）===
+        # === Market Environment Bonus (max 10 points) ===
+        market_bonus = 0
+        if market_context:
+            # Market trend bonus
+            market_trend = market_context.get('market_trend', 'neutral')
+            if market_trend == 'bull':
+                market_bonus += 5
+                reasons.append("✅ 大盘环境向好，顺势而为")
+            elif market_trend == 'bear':
+                market_bonus -= 3
+                risks.append("⚠️ 大盘偏弱，谨慎操作")
+            
+            # North-bound capital flow bonus
+            north_flow = market_context.get('north_flow', 0)
+            if north_flow > 50:  # Strong inflow
+                market_bonus += 5
+                reasons.append(f"✅ 北向资金大幅流入({north_flow:.1f}亿)")
+            elif north_flow > 0:  # Moderate inflow
+                market_bonus += 3
+                reasons.append(f"✅ 北向资金净流入({north_flow:.1f}亿)")
+            elif north_flow < -50:  # Strong outflow
+                market_bonus -= 3
+                risks.append(f"⚠️ 北向资金大幅流出({north_flow:.1f}亿)")
+            
+            # Rising ratio bonus
+            up_ratio = market_context.get('up_ratio', 0.5)
+            if up_ratio > 0.6:
+                market_bonus += 2
+            elif up_ratio < 0.4:
+                market_bonus -= 2
+            
+            # Industry money flow bonus (NEW)
+            industry_moneyflow = market_context.get('industry_moneyflow', {})
+            if industry_moneyflow:
+                industry_net = industry_moneyflow.get('net_amount', 0)  # Net amount in billion CNY
+                industry_rank = industry_moneyflow.get('industry_rank', 0)
+                total_industries = industry_moneyflow.get('total_industries', 90)
+                
+                # Industry net inflow bonus
+                if industry_net > 10:  # Strong industry inflow (>10亿)
+                    market_bonus += 5
+                    reasons.append(f"✅ 行业资金大幅流入({industry_net:.1f}亿)")
+                elif industry_net > 5:  # Moderate industry inflow
+                    market_bonus += 3
+                    reasons.append(f"✅ 行业资金净流入({industry_net:.1f}亿)")
+                elif industry_net > 0:  # Slight industry inflow
+                    market_bonus += 1
+                    reasons.append(f"✅ 行业资金微幅流入({industry_net:.1f}亿)")
+                elif industry_net < -10:  # Strong industry outflow
+                    market_bonus -= 4
+                    risks.append(f"⚠️ 行业资金大幅流出({industry_net:.1f}亿)")
+                elif industry_net < -5:  # Moderate industry outflow
+                    market_bonus -= 2
+                    risks.append(f"⚠️ 行业资金净流出({industry_net:.1f}亿)")
+                
+                # Industry ranking bonus (top 20% industries)
+                if industry_rank > 0 and total_industries > 0:
+                    rank_ratio = industry_rank / total_industries
+                    if rank_ratio <= 0.2:  # Top 20%
+                        market_bonus += 3
+                        reasons.append(f"✅ 行业资金排名靠前(第{industry_rank}名)")
+                    elif rank_ratio >= 0.8:  # Bottom 20%
+                        market_bonus -= 2
+                        risks.append(f"⚠️ 行业资金排名靠后(第{industry_rank}名)")
+        
+        score += max(0, market_bonus)  # Ensure non-negative
+
+        # === Trend Score (25 points) - More lenient ===
         trend_scores = {
-            TrendStatus.STRONG_BULL: 30,
-            TrendStatus.BULL: 26,
+            TrendStatus.STRONG_BULL: 25,
+            TrendStatus.BULL: 22,
             TrendStatus.WEAK_BULL: 18,
-            TrendStatus.CONSOLIDATION: 12,
-            TrendStatus.WEAK_BEAR: 8,
-            TrendStatus.BEAR: 4,
-            TrendStatus.STRONG_BEAR: 0,
+            TrendStatus.CONSOLIDATION: 15,  # Increased from 12
+            TrendStatus.WEAK_BEAR: 12,      # Increased from 8
+            TrendStatus.BEAR: 8,            # Increased from 4
+            TrendStatus.STRONG_BEAR: 5,     # Increased from 0
         }
-        trend_score = trend_scores.get(result.trend_status, 12)
+        trend_score = trend_scores.get(result.trend_status, 15)
         score += trend_score
 
         if result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
             reasons.append(f"✅ {result.trend_status.value}，顺势做多")
+        elif result.trend_status == TrendStatus.CONSOLIDATION:
+            reasons.append(f"⚡ {result.trend_status.value}，等待方向选择")
+        elif result.trend_status in [TrendStatus.WEAK_BEAR]:
+            reasons.append(f"⚠️ {result.trend_status.value}，轻仓观望")
         elif result.trend_status in [TrendStatus.BEAR, TrendStatus.STRONG_BEAR]:
             risks.append(f"⚠️ {result.trend_status.value}，不宜做多")
 
-        # === 乖离率评分（20分）===
+        # === Bias Score (20 points) - Wider acceptable range ===
         bias = result.bias_ma5
         if bias < 0:
-            # 价格在 MA5 下方（回调中）
+            # Price below MA5 (pullback)
             if bias > -3:
                 score += 20
                 reasons.append(f"✅ 价格略低于MA5({bias:.1f}%)，回踩买点")
             elif bias > -5:
-                score += 16
+                score += 18
                 reasons.append(f"✅ 价格回踩MA5({bias:.1f}%)，观察支撑")
+            elif bias > -8:  # Extended range
+                score += 14
+                reasons.append(f"⚡ 深度回调({bias:.1f}%)，关注支撑")
             else:
-                score += 8
-                risks.append(f"⚠️ 乖离率过大({bias:.1f}%)，可能破位")
-        elif bias < 2:
+                score += 10  # Increased from 8
+                risks.append(f"⚠️ 乖离率较大({bias:.1f}%)，可能破位")
+        elif bias < 3:  # Extended from 2
             score += 18
             reasons.append(f"✅ 价格贴近MA5({bias:.1f}%)，介入好时机")
-        elif bias < self.BIAS_THRESHOLD:
-            score += 14
+        elif bias < 6:  # Extended from 5
+            score += 15
             reasons.append(f"⚡ 价格略高于MA5({bias:.1f}%)，可小仓介入")
+        elif bias < 8:  # New range
+            score += 10
+            reasons.append(f"⚡ 乖离率偏高({bias:.1f}%)，谨慎追高")
         else:
-            score += 4
-            risks.append(f"❌ 乖离率过高({bias:.1f}%>5%)，严禁追高！")
+            score += 5  # Increased from 4
+            risks.append(f"❌ 乖离率过高({bias:.1f}%)，不宜追高")
 
-        # === 量能评分（15分）===
+        # === Volume Score (20 points) - Increased weight ===
         volume_scores = {
-            VolumeStatus.SHRINK_VOLUME_DOWN: 15,  # 缩量回调最佳
-            VolumeStatus.HEAVY_VOLUME_UP: 12,     # 放量上涨次之
-            VolumeStatus.NORMAL: 10,
-            VolumeStatus.SHRINK_VOLUME_UP: 6,     # 无量上涨较差
-            VolumeStatus.HEAVY_VOLUME_DOWN: 0,    # 放量下跌最差
+            VolumeStatus.SHRINK_VOLUME_DOWN: 20,  # Best for pullback
+            VolumeStatus.HEAVY_VOLUME_UP: 18,     # Good for breakout
+            VolumeStatus.NORMAL: 15,              # Increased from 10
+            VolumeStatus.SHRINK_VOLUME_UP: 12,    # Increased from 6
+            VolumeStatus.HEAVY_VOLUME_DOWN: 8,    # Increased from 0
         }
-        vol_score = volume_scores.get(result.volume_status, 8)
+        vol_score = volume_scores.get(result.volume_status, 12)
         score += vol_score
 
         if result.volume_status == VolumeStatus.SHRINK_VOLUME_DOWN:
             reasons.append("✅ 缩量回调，主力洗盘")
+        elif result.volume_status == VolumeStatus.HEAVY_VOLUME_UP:
+            reasons.append("✅ 放量上涨，资金介入")
+        elif result.volume_status == VolumeStatus.NORMAL:
+            reasons.append("⚡ 量能正常，观望为主")
         elif result.volume_status == VolumeStatus.HEAVY_VOLUME_DOWN:
             risks.append("⚠️ 放量下跌，注意风险")
 
-        # === 支撑评分（10分）===
+        # === Support Score (10 points) ===
         if result.support_ma5:
             score += 5
             reasons.append("✅ MA5支撑有效")
@@ -660,17 +752,17 @@ class StockTrendAnalyzer:
             score += 5
             reasons.append("✅ MA10支撑有效")
 
-        # === MACD 评分（15分）===
+        # === MACD Score (15 points) ===
         macd_scores = {
-            MACDStatus.GOLDEN_CROSS_ZERO: 15,  # 零轴上金叉最强
-            MACDStatus.GOLDEN_CROSS: 12,      # 金叉
-            MACDStatus.CROSSING_UP: 10,       # 上穿零轴
-            MACDStatus.BULLISH: 8,            # 多头
-            MACDStatus.BEARISH: 2,            # 空头
-            MACDStatus.CROSSING_DOWN: 0,       # 下穿零轴
-            MACDStatus.DEATH_CROSS: 0,        # 死叉
+            MACDStatus.GOLDEN_CROSS_ZERO: 15,
+            MACDStatus.GOLDEN_CROSS: 13,
+            MACDStatus.CROSSING_UP: 11,
+            MACDStatus.BULLISH: 10,        # Increased from 8
+            MACDStatus.BEARISH: 6,         # Increased from 2
+            MACDStatus.CROSSING_DOWN: 4,   # Increased from 0
+            MACDStatus.DEATH_CROSS: 3,     # Increased from 0
         }
-        macd_score = macd_scores.get(result.macd_status, 5)
+        macd_score = macd_scores.get(result.macd_status, 8)
         score += macd_score
 
         if result.macd_status in [MACDStatus.GOLDEN_CROSS_ZERO, MACDStatus.GOLDEN_CROSS]:
@@ -680,15 +772,15 @@ class StockTrendAnalyzer:
         else:
             reasons.append(result.macd_signal)
 
-        # === RSI 评分（10分）===
+        # === RSI Score (10 points) ===
         rsi_scores = {
-            RSIStatus.OVERSOLD: 10,       # 超卖最佳
-            RSIStatus.STRONG_BUY: 8,     # 强势
-            RSIStatus.NEUTRAL: 5,        # 中性
-            RSIStatus.WEAK: 3,            # 弱势
-            RSIStatus.OVERBOUGHT: 0,       # 超买最差
+            RSIStatus.OVERSOLD: 10,
+            RSIStatus.STRONG_BUY: 9,
+            RSIStatus.NEUTRAL: 7,    # Increased from 5
+            RSIStatus.WEAK: 5,       # Increased from 3
+            RSIStatus.OVERBOUGHT: 3, # Increased from 0
         }
-        rsi_score = rsi_scores.get(result.rsi_status, 5)
+        rsi_score = rsi_scores.get(result.rsi_status, 7)
         score += rsi_score
 
         if result.rsi_status in [RSIStatus.OVERSOLD, RSIStatus.STRONG_BUY]:
@@ -698,19 +790,19 @@ class StockTrendAnalyzer:
         else:
             reasons.append(result.rsi_signal)
 
-        # === 综合判断 ===
-        result.signal_score = score
+        # === Final Score (cap at 100) ===
+        result.signal_score = min(100, score)
         result.signal_reasons = reasons
         result.risk_factors = risks
 
-        # 生成买入信号（调整阈值以适应新的100分制）
-        if score >= 75 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
+        # Generate buy signal (lowered thresholds for more practical signals)
+        if score >= 70 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
             result.buy_signal = BuySignal.STRONG_BUY
-        elif score >= 60 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL]:
+        elif score >= 55 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL]:
             result.buy_signal = BuySignal.BUY
-        elif score >= 45:
+        elif score >= 40:  # Lowered from 45
             result.buy_signal = BuySignal.HOLD
-        elif score >= 30:
+        elif score >= 25:  # Lowered from 30
             result.buy_signal = BuySignal.WAIT
         elif result.trend_status in [TrendStatus.BEAR, TrendStatus.STRONG_BEAR]:
             result.buy_signal = BuySignal.STRONG_SELL

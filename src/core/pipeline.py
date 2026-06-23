@@ -221,6 +221,22 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 趋势分析失败: {e}")
             
+            # Step 3.5: 获取行业资金流向（板块资金分析）
+            industry_moneyflow = None
+            try:
+                industry_moneyflow = self.fetcher_manager.get_stock_industry_moneyflow(code)
+                if industry_moneyflow:
+                    industry_data = industry_moneyflow.get('industry_moneyflow', {})
+                    industry_name = industry_moneyflow.get('industry_name', '未知')
+                    industry_rank = industry_moneyflow.get('industry_rank', 0)
+                    net_amount = industry_data.get('net_amount', 0)
+                    logger.info(f"[{code}] 行业资金流向: 行业={industry_name}, "
+                              f"排名={industry_rank}, 净流入={net_amount:.2f}亿")
+                else:
+                    logger.debug(f"[{code}] 行业资金流向获取失败或无数据")
+            except Exception as e:
+                logger.warning(f"[{code}] 获取行业资金流向失败: {e}")
+            
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
             news_context = None
             if self.search_service.is_available:
@@ -275,23 +291,26 @@ class StockAnalysisPipeline:
                     'yesterday': {}
                 }
             
-            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
+            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称、行业资金流向）
             enhanced_context = self._enhance_context(
                 context, 
                 realtime_quote, 
                 chip_data, 
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,  # 传入股票名称
+                industry_moneyflow  # 传入行业资金流向
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
 
-            # Step 7.5: 填充分析时的价格信息到 result
+            # Step 7.5: 填充分析时的价格信息和上下文到 result
             if result:
                 realtime_data = enhanced_context.get('realtime', {})
                 result.current_price = realtime_data.get('price')
                 result.change_pct = realtime_data.get('change_pct')
+                # 保存完整的上下文（包含行业资金流向等）
+                result.context = enhanced_context
 
             # Step 8: 保存分析历史记录
             # Fix #281/#298: generate a unique query_id per stock so each
@@ -331,12 +350,13 @@ class StockAnalysisPipeline:
         realtime_quote,
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        industry_moneyflow: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
         
-        将实时行情、筹码分布、趋势分析结果、股票名称添加到上下文中
+        将实时行情、筹码分布、趋势分析结果、股票名称、行业资金流向添加到上下文中
         
         Args:
             context: 原始上下文
@@ -344,6 +364,7 @@ class StockAnalysisPipeline:
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
+            industry_moneyflow: 行业资金流向数据
             
         Returns:
             增强后的上下文
@@ -380,13 +401,23 @@ class StockAnalysisPipeline:
         # 添加筹码分布
         if chip_data:
             current_price = getattr(realtime_quote, 'price', 0) if realtime_quote else 0
-            enhanced['chip'] = {
-                'profit_ratio': chip_data.profit_ratio,
-                'avg_cost': chip_data.avg_cost,
-                'concentration_90': chip_data.concentration_90,
-                'concentration_70': chip_data.concentration_70,
-                'chip_status': chip_data.get_chip_status(current_price or 0),
-            }
+            # Handle both dict and object types for chip_data
+            if isinstance(chip_data, dict):
+                enhanced['chip'] = {
+                    'profit_ratio': chip_data.get('profit_ratio', 0),
+                    'avg_cost': chip_data.get('avg_cost', 0),
+                    'concentration_90': chip_data.get('concentration_90', 0),
+                    'concentration_70': chip_data.get('concentration_70', 0),
+                    'chip_status': chip_data.get('chip_status', '未知'),
+                }
+            else:
+                enhanced['chip'] = {
+                    'profit_ratio': chip_data.profit_ratio,
+                    'avg_cost': chip_data.avg_cost,
+                    'concentration_90': chip_data.concentration_90,
+                    'concentration_70': chip_data.concentration_70,
+                    'chip_status': chip_data.get_chip_status(current_price or 0),
+                }
         
         # 添加趋势分析结果
         if trend_result:
@@ -402,6 +433,20 @@ class StockAnalysisPipeline:
                 'signal_score': trend_result.signal_score,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
+            }
+        
+        # 添加行业资金流向
+        if industry_moneyflow:
+            industry_data = industry_moneyflow.get('industry_moneyflow', {})
+            enhanced['industry_moneyflow'] = {
+                'industry_name': industry_moneyflow.get('industry_name', '未知'),
+                'industry_rank': industry_moneyflow.get('industry_rank', 0),
+                'total_industries': industry_moneyflow.get('total_industries', 90),
+                'net_amount': industry_data.get('net_amount', 0),
+                'net_buy_amount': industry_data.get('net_buy_amount', 0),
+                'net_sell_amount': industry_data.get('net_sell_amount', 0),
+                'pct_change': industry_data.get('pct_change', 0),
+                'lead_stock': industry_data.get('lead_stock', ''),
             }
         
         return enhanced

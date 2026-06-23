@@ -174,6 +174,34 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """
+        Get north-bound capital flow data (北向资金流向).
+        
+        Returns:
+            Dict with keys:
+                - north_net_flow: Net flow amount (billion CNY)
+                - north_buy_amount: Buy amount (billion CNY)
+                - north_sell_amount: Sell amount (billion CNY)
+                - date: Date string
+        """
+        return None
+
+    def get_individual_capital_flow(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get individual stock capital flow data (个股资金流向).
+        
+        Args:
+            stock_code: Stock code
+            
+        Returns:
+            Dict with keys:
+                - main_net_inflow: Main force net inflow
+                - retail_net_inflow: Retail net inflow
+                - date: Date string
+        """
+        return None
+
     def get_daily_data(
         self,
         stock_code: str, 
@@ -916,3 +944,190 @@ class DataFetcherManager:
                 logger.warning(f"[{fetcher.name}] 获取板块排行失败: {e}")
                 continue
         return [], []
+
+    def get_north_flow(self) -> Dict[str, Any]:
+        """Get north-bound capital flow data (北向资金流向)"""
+        for fetcher in self._fetchers:
+            try:
+                data = fetcher.get_north_flow()
+                if data:
+                    logger.info(f"[{fetcher.name}] 获取北向资金成功")
+                    return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取北向资金失败: {e}")
+                continue
+        return {}
+
+    def get_individual_capital_flow(self, stock_code: str) -> Dict[str, Any]:
+        """Get individual stock capital flow data (个股资金流向)"""
+        for fetcher in self._fetchers:
+            try:
+                data = fetcher.get_individual_capital_flow(stock_code)
+                if data:
+                    logger.info(f"[{fetcher.name}] 获取个股资金流向成功")
+                    return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取个股资金流向失败: {e}")
+                continue
+        return {}
+
+    def get_top10_holders(self, stock_code: str, period: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get top 10 shareholders data (十大股东)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+            period: Reporting period (e.g., '20231231'), if None, get the latest
+        
+        Returns:
+            Dictionary containing top 10 shareholders data
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_top10_holders'):
+                    data = fetcher.get_top10_holders(stock_code, period)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取十大股东成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取十大股东失败: {e}")
+                continue
+        return {}
+
+    def get_shareholder_number(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Get shareholder number changes (股东人数变化)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing shareholder number data
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_shareholder_number'):
+                    data = fetcher.get_shareholder_number(stock_code)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取股东人数成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取股东人数失败: {e}")
+                continue
+        return {}
+
+    def get_broker_forecast(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Get broker earnings forecast data (券商盈利预测)
+        Note: This requires high-level Tushare permission (10000 points)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing broker forecast data
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_broker_forecast'):
+                    data = fetcher.get_broker_forecast(stock_code)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取券商预测成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取券商预测失败: {e}")
+                continue
+        return {}
+
+    def get_industry_info(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Get industry classification information (行业分类信息)
+        Note: This requires Tushare permission (5000 points)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing industry information
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_industry_info'):
+                    data = fetcher.get_industry_info(stock_code)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取行业信息成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取行业信息失败: {e}")
+                continue
+        return {}
+
+    def get_chip_distribution(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Get chip distribution and win rate data (筹码分布和胜率)
+        Note: This requires high-level Tushare permission (10000 points)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing chip distribution data
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_chip_distribution'):
+                    data = fetcher.get_chip_distribution(stock_code)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取筹码分布成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取筹码分布失败: {e}")
+                continue
+        return {}
+
+    def get_industry_moneyflow(self, industry_name: Optional[str] = None, trade_date: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get industry/sector money flow data (行业资金流向)
+        Note: This requires Tushare permission (6000 points)
+        
+        Args:
+            industry_name: Industry name (e.g., '医药生物'), if None, get all industries
+            trade_date: Trade date (YYYYMMDD), if None, get the latest
+        
+        Returns:
+            Dictionary containing industry money flow data
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_industry_moneyflow'):
+                    data = fetcher.get_industry_moneyflow(industry_name, trade_date)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取行业资金流向成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取行业资金流向失败: {e}")
+                continue
+        return {}
+
+    def get_stock_industry_moneyflow(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Get money flow data for the industry that the stock belongs to (股票所属行业资金流向)
+        
+        Args:
+            stock_code: Stock code (e.g., '600519')
+        
+        Returns:
+            Dictionary containing industry money flow data for the stock's industry
+        """
+        for fetcher in self._fetchers:
+            try:
+                if hasattr(fetcher, 'get_stock_industry_moneyflow'):
+                    # Pass fetcher_manager to allow multi-source fallback
+                    data = fetcher.get_stock_industry_moneyflow(stock_code, fetcher_manager=self)
+                    if data:
+                        logger.info(f"[{fetcher.name}] 获取股票行业资金流向成功")
+                        return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取股票行业资金流向失败: {e}")
+                continue
+        return {}

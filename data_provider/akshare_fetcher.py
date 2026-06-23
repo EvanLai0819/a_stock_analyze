@@ -1521,6 +1521,404 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[Akshare] 新浪接口获取板块排行也失败: {e}")
             return None
 
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """
+        Get north-bound capital flow data (北向资金流向).
+        
+        Data source: akshare stock_hsgt_north_net_flow_in_em
+        
+        Returns:
+            Dict with keys:
+                - north_net_flow: Net flow amount (billion CNY)
+                - north_buy_amount: Buy amount (billion CNY)
+                - north_sell_amount: Sell amount (billion CNY)
+                - date: Date string
+        """
+        import akshare as ak
+        
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            logger.info("[API调用] ak.stock_hsgt_north_net_flow_in_em() 获取北向资金...")
+            df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
+            
+            if df is not None and not df.empty:
+                # Get the latest data
+                latest = df.iloc[-1]
+                
+                result = {
+                    'date': str(latest.get('日期', '')),
+                    'north_net_flow': 0.0,
+                    'north_buy_amount': 0.0,
+                    'north_sell_amount': 0.0,
+                }
+                
+                # Try different column names for net flow
+                for col in ['当日净流入', '净流入', 'north_net']:
+                    if col in df.columns:
+                        value = safe_float(latest[col])
+                        result['north_net_flow'] = value / 1e8  # Convert to billion
+                        break
+                
+                # Try different column names for buy amount
+                for col in ['当日买入', '买入', 'north_buy']:
+                    if col in df.columns:
+                        value = safe_float(latest[col])
+                        result['north_buy_amount'] = value / 1e8
+                        break
+                
+                # Try different column names for sell amount
+                for col in ['当日卖出', '卖出', 'north_sell']:
+                    if col in df.columns:
+                        value = safe_float(latest[col])
+                        result['north_sell_amount'] = value / 1e8
+                        break
+                
+                logger.info(f"[北向资金] 净流入: {result['north_net_flow']:.2f}亿")
+                return result
+                
+        except Exception as e:
+            logger.warning(f"[Akshare] 获取北向资金失败: {e}")
+        
+        return None
+
+    def get_individual_capital_flow(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get individual stock capital flow data (个股资金流向).
+        
+        Data source: akshare stock_individual_fund_flow
+        
+        Args:
+            stock_code: Stock code (6-digit)
+            
+        Returns:
+            Dict with keys:
+                - main_net_inflow: Main force net inflow (million CNY)
+                - retail_net_inflow: Retail net inflow (million CNY)
+                - super_net_inflow: Super large net inflow (million CNY)
+                - large_net_inflow: Large net inflow (million CNY)
+                - medium_net_inflow: Medium net inflow (million CNY)
+                - small_net_inflow: Small net inflow (million CNY)
+        """
+        import akshare as ak
+        
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            logger.info(f"[API调用] ak.stock_individual_fund_flow() 获取个股资金流向 {stock_code}...")
+            df = ak.stock_individual_fund_flow(stock=stock_code, market="sh" if stock_code.startswith('6') else "sz")
+            
+            if df is not None and not df.empty:
+                # Get the latest data
+                latest = df.iloc[-1]
+                
+                result = {
+                    'date': str(latest.get('日期', '')),
+                    'main_net_inflow': 0.0,
+                    'retail_net_inflow': 0.0,
+                    'super_net_inflow': 0.0,
+                    'large_net_inflow': 0.0,
+                    'medium_net_inflow': 0.0,
+                    'small_net_inflow': 0.0,
+                }
+                
+                # Try different column names
+                col_mappings = {
+                    'main_net_inflow': ['主力净流入', 'main_net_inflow'],
+                    'retail_net_inflow': ['散户净流入', 'retail_net_inflow'],
+                    'super_net_inflow': ['超大单净流入', 'super_net_inflow'],
+                    'large_net_inflow': ['大单净流入', 'large_net_inflow'],
+                    'medium_net_inflow': ['中单净流入', 'medium_net_inflow'],
+                    'small_net_inflow': ['小单净流入', 'small_net_inflow'],
+                }
+                
+                for key, cols in col_mappings.items():
+                    for col in cols:
+                        if col in df.columns:
+                            result[key] = safe_float(latest[col])
+                            break
+                
+                logger.info(f"[资金流向] {stock_code} 主力净流入: {result['main_net_inflow']:.2f}万")
+                return result
+                
+        except Exception as e:
+            logger.warning(f"[Akshare] 获取个股资金流向失败 {stock_code}: {e}")
+        
+        return None
+    
+    def get_stock_industry_info(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get stock's industry/sector information (股票所属行业信息).
+        
+        Data source: efinance get_belong_board
+        
+        Args:
+            stock_code: Stock code (6-digit)
+            
+        Returns:
+            Dict with keys:
+                - industry_name: Primary industry name
+                - industry_code: Primary industry code
+                - all_boards: List of all boards the stock belongs to
+        """
+        try:
+            import efinance as ef
+            
+            logger.info(f"[API调用] ef.stock.get_belong_board() 获取股票所属行业 {stock_code}...")
+            df = ef.stock.get_belong_board(stock_code)
+            
+            if df is not None and not df.empty:
+                # Find primary industry (usually the first or second row)
+                # Priority: 行业板块 > 概念板块 > 地域板块
+                industry_priority = ['化学制药', '化学制剂', '医药生物', '医疗器械', '中药']
+                
+                primary_industry = None
+                primary_code = None
+                
+                # Try to find industry by priority
+                for _, row in df.iterrows():
+                    board_name = row.get('板块名称', '')
+                    board_code = row.get('板块代码', '')
+                    if any(ind in board_name for ind in industry_priority):
+                        primary_industry = board_name
+                        primary_code = board_code
+                        # Prefer 化学制药 over 化学制剂
+                        if '化学制药' in board_name:
+                            break
+                
+                # If not found, use the first non-concept board
+                if not primary_industry:
+                    for _, row in df.iterrows():
+                        board_name = row.get('板块名称', '')
+                        board_code = row.get('板块代码', '')
+                        # Skip concept boards (概念板块)
+                        if '概念' not in board_name and '板块' not in board_name[:4]:
+                            primary_industry = board_name
+                            primary_code = board_code
+                            break
+                
+                # If still not found, use the first one
+                if not primary_industry and len(df) > 0:
+                    primary_industry = df.iloc[0].get('板块名称', '未知')
+                    primary_code = df.iloc[0].get('板块代码', '')
+                
+                result = {
+                    'industry_name': primary_industry or '未知',
+                    'industry_code': primary_code or '',
+                    'all_boards': df.to_dict('records')
+                }
+                
+                logger.info(f"[行业信息] {stock_code} 所属行业: {result['industry_name']}")
+                return result
+                
+        except Exception as e:
+            logger.warning(f"[Efinance] 获取股票行业信息失败 {stock_code}: {e}")
+        
+        return None
+    
+    def get_industry_moneyflow(self, industry_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get industry/sector money flow data (行业资金流向).
+        
+        Data source: efinance get_belong_board + manual calculation
+        
+        Args:
+            industry_name: Industry name (e.g., '化学制药'), if None, get all industries
+            
+        Returns:
+            Dict with keys:
+                - industries: List of industry money flow data
+                - industry_count: Total number of industries
+                - top_inflow: Top inflow industry
+                - top_outflow: Top outflow industry
+        """
+        try:
+            import efinance as ef
+            
+            logger.info(f"[API调用] 获取行业资金流向数据...")
+            
+            # Get all stocks realtime quotes
+            df_stocks = ef.stock.get_realtime_quotes()
+            
+            if df_stocks is None or df_stocks.empty:
+                logger.warning("Failed to get realtime quotes")
+                return None
+            
+            # Get all industry boards
+            # We'll use get_belong_board for a sample stock to get board list
+            # Then calculate money flow for each board
+            
+            # For now, return a simplified version
+            # In production, you would:
+            # 1. Get all industry boards
+            # 2. For each board, get its members
+            # 3. Sum up the money flow for all members
+            
+            logger.warning("Industry money flow calculation not fully implemented yet")
+            logger.warning("Consider using Tushare Pro API (requires 6000 points)")
+            
+            return None
+                
+        except Exception as e:
+            logger.warning(f"[Efinance] 获取行业资金流向失败: {e}")
+        
+        return None
+    
+    def get_stock_industry_moneyflow(self, stock_code: str, fetcher_manager=None) -> Optional[Dict[str, Any]]:
+        """
+        Get money flow data for the industry that the stock belongs to (股票所属行业资金流向).
+        
+        This is a simplified version that uses available data.
+        
+        Args:
+            stock_code: Stock code (6-digit)
+            fetcher_manager: DataFetcherManager instance (optional, for fallback)
+            
+        Returns:
+            Dict with keys:
+                - industry_name: Industry name
+                - industry_code: Industry code
+                - industry_rank: Industry rank (by money flow)
+                - total_industries: Total number of industries
+                - industry_moneyflow: Industry money flow data
+        """
+        try:
+            # Step 1: Get stock's industry info
+            industry_info = self.get_stock_industry_info(stock_code)
+            
+            if not industry_info:
+                logger.warning(f"Cannot get industry info for {stock_code}")
+                return None
+            
+            industry_name = industry_info['industry_name']
+            industry_code = industry_info['industry_code']
+            
+            # Step 2: Try to get industry board members using akshare
+            import akshare as ak
+            
+            logger.info(f"[API调用] ak.stock_board_industry_cons_em() 获取行业成员 {industry_name}...")
+            
+            try:
+                df_members = ak.stock_board_industry_cons_em(symbol=industry_name)
+            except Exception as e:
+                logger.warning(f"Failed to get industry members via akshare: {e}")
+                df_members = None
+            
+            if df_members is None or df_members.empty:
+                logger.warning(f"Cannot get members for industry {industry_name}")
+                
+                # Fallback: Use individual stock's capital flow as industry proxy
+                logger.info(f"[降级方案] 使用个股资金流向作为行业代理...")
+                
+                # Try to get capital flow via fetcher_manager (multi-source)
+                cap_flow = None
+                if fetcher_manager:
+                    try:
+                        cap_flow = fetcher_manager.get_individual_capital_flow(stock_code)
+                        if cap_flow:
+                            logger.info(f"[降级方案] 通过DataFetcherManager获取个股资金流向成功")
+                    except Exception as e:
+                        logger.warning(f"[降级方案] 通过DataFetcherManager获取个股资金流向失败: {e}")
+                
+                # Fallback to self if fetcher_manager failed or not provided
+                if not cap_flow:
+                    cap_flow = self.get_individual_capital_flow(stock_code)
+                
+                if cap_flow:
+                    result = {
+                        'industry_name': industry_name,
+                        'industry_code': industry_code,
+                        'industry_rank': 0,
+                        'total_industries': 90,
+                        'industry_moneyflow': {
+                            'net_amount': cap_flow.get('main_net_inflow', 0) / 10000,  # Convert to 亿
+                            'net_buy_amount': max(cap_flow.get('main_net_inflow', 0), 0) / 10000,
+                            'net_sell_amount': max(-cap_flow.get('main_net_inflow', 0), 0) / 10000,
+                            'pct_change': 0,
+                            'lead_stock': '',
+                            'member_count': 1,
+                        }
+                    }
+                    
+                    logger.info(f"[行业资金流向] {stock_code} 行业: {industry_name} (降级), "
+                               f"净流入: {result['industry_moneyflow']['net_amount']:.2f}亿")
+                    return result
+                
+                return None
+            
+            # Step 3: Calculate industry money flow
+            # Sum up individual stock money flows
+            total_net_inflow = 0.0
+            total_buy_amount = 0.0
+            total_sell_amount = 0.0
+            total_change_pct = 0.0
+            lead_stock = ''
+            max_change = -999
+            member_count = 0
+            
+            # Limit to top 50 members to avoid too many API calls
+            max_members = min(len(df_members), 50)
+            
+            for idx in range(max_members):
+                member = df_members.iloc[idx]
+                member_code = str(member.get('代码', member.get('股票代码', '')))
+                
+                if not member_code or len(member_code) != 6:
+                    continue
+                
+                member_count += 1
+                
+                # Get individual stock capital flow
+                cap_flow = self.get_individual_capital_flow(member_code)
+                
+                if cap_flow:
+                    main_net = cap_flow.get('main_net_inflow', 0)
+                    total_net_inflow += main_net
+                    
+                    if main_net > 0:
+                        total_buy_amount += main_net
+                    else:
+                        total_sell_amount += abs(main_net)
+                
+                # Track lead stock
+                change_pct = safe_float(member.get('涨跌幅', 0))
+                total_change_pct += change_pct
+                
+                if change_pct > max_change:
+                    max_change = change_pct
+                    lead_stock = member.get('名称', member.get('股票名称', ''))
+            
+            # Calculate average change
+            avg_change_pct = total_change_pct / member_count if member_count > 0 else 0
+            
+            result = {
+                'industry_name': industry_name,
+                'industry_code': industry_code,
+                'industry_rank': 0,  # Would need all industries to calculate rank
+                'total_industries': 90,  # Approximate number
+                'industry_moneyflow': {
+                    'net_amount': total_net_inflow / 10000,  # Convert to 亿
+                    'net_buy_amount': total_buy_amount / 10000,
+                    'net_sell_amount': total_sell_amount / 10000,
+                    'pct_change': avg_change_pct,
+                    'lead_stock': lead_stock,
+                    'member_count': member_count,
+                }
+            }
+            
+            logger.info(f"[行业资金流向] {stock_code} 行业: {industry_name}, "
+                       f"净流入: {result['industry_moneyflow']['net_amount']:.2f}亿, "
+                       f"成员数: {member_count}")
+            
+            return result
+                
+        except Exception as e:
+            logger.warning(f"[Akshare] 获取股票行业资金流向失败 {stock_code}: {e}")
+        
+        return None
+
 
 if __name__ == "__main__":
     # 测试代码
