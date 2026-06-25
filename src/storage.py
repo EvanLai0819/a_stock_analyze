@@ -363,6 +363,218 @@ class BacktestSummary(Base):
     )
 
 
+# === 板块资金追踪数据模型 ===
+
+class IndustryMoneyflowDaily(Base):
+    """
+    板块资金流向日数据模型
+    
+    存储每日板块的资金流向数据，支持历史追踪和趋势分析
+    """
+    __tablename__ = 'industry_moneyflow_daily'
+    
+    # 主键
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # 板块名称（如"化学制药"）
+    industry_name = Column(String(50), nullable=False, index=True)
+    
+    # 交易日期
+    trade_date = Column(Date, nullable=False, index=True)
+    
+    # 资金流向数据
+    net_amount = Column(Float)  # 净流入金额（亿）
+    net_buy_amount = Column(Float)  # 净买入金额（亿）
+    net_sell_amount = Column(Float)  # 净卖出金额（亿）
+    pct_change = Column(Float)  # 板块涨跌幅（%）
+    
+    # 排名数据
+    rank = Column(Integer)  # 板块排名（按资金流向）
+    total_industries = Column(Integer)  # 总板块数
+    
+    # 领涨股信息
+    lead_stock = Column(String(20))  # 领涨股代码
+    lead_stock_name = Column(String(50))  # 领涨股名称
+    lead_stock_change = Column(Float)  # 领涨股涨跌幅（%）
+    
+    # 数据来源
+    data_source = Column(String(50))  # 记录数据来源
+    
+    # 更新时间
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # 唯一约束：同一板块同一日期只能有一条数据
+    __table_args__ = (
+        UniqueConstraint('industry_name', 'trade_date', name='uix_industry_date'),
+        Index('ix_industry_trade_date', 'industry_name', 'trade_date'),
+    )
+    
+    def __repr__(self):
+        return f"<IndustryMoneyflowDaily(industry={self.industry_name}, date={self.trade_date}, net={self.net_amount})>"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'industry_name': self.industry_name,
+            'trade_date': self.trade_date,
+            'net_amount': self.net_amount,
+            'net_buy_amount': self.net_buy_amount,
+            'net_sell_amount': self.net_sell_amount,
+            'pct_change': self.pct_change,
+            'rank': self.rank,
+            'total_industries': self.total_industries,
+            'lead_stock': self.lead_stock,
+            'lead_stock_name': self.lead_stock_name,
+            'lead_stock_change': self.lead_stock_change,
+            'data_source': self.data_source,
+        }
+
+
+class IndustryMoneyflowAlert(Base):
+    """
+    板块资金流向预警记录模型
+    
+    记录板块资金连续流入/流出预警，以及异常波动检测
+    """
+    __tablename__ = 'industry_moneyflow_alert'
+    
+    # 主键
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # 板块名称
+    industry_name = Column(String(50), nullable=False, index=True)
+    
+    # 预警日期
+    alert_date = Column(Date, nullable=False, index=True)
+    
+    # 预警信息
+    alert_type = Column(String(32), nullable=False)  # continuous_inflow/continuous_outflow/abnormal_volatility
+    alert_level = Column(String(16))  # high/medium/low
+    consecutive_days = Column(Integer)  # 连续天数
+    total_amount = Column(Float)  # 总金额（累计流入/流出）
+    avg_amount = Column(Float)  # 平均金额
+    trigger_condition = Column(Text)  # 触发条件描述
+    recommendation = Column(Text)  # 建议操作
+    
+    # 龙头股信息
+    lead_stock = Column(String(20))  # 预警期间的龙头股
+    lead_stock_name = Column(String(50))
+    
+    # 状态
+    is_active = Column(Boolean, default=True)  # 预警是否仍然有效
+    resolved_at = Column(DateTime)  # 预警解除时间
+    
+    # 更新时间
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    __table_args__ = (
+        UniqueConstraint('industry_name', 'alert_date', 'alert_type', name='uix_industry_alert'),
+        Index('ix_industry_alert_date', 'industry_name', 'alert_date'),
+    )
+    
+    def __repr__(self):
+        return f"<IndustryMoneyflowAlert(industry={self.industry_name}, type={self.alert_type}, days={self.consecutive_days})>"
+
+
+class IndustryRotation(Base):
+    """
+    板块轮动分析结果模型
+    
+    分析资金在不同板块间的流动情况
+    """
+    __tablename__ = 'industry_rotation'
+    
+    # 主键
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # 分析日期
+    analysis_date = Column(Date, nullable=False, index=True)
+    
+    # 流出板块
+    outflow_industry = Column(String(50), nullable=False, index=True)
+    outflow_amount = Column(Float)  # 流出金额（亿）
+    outflow_pct = Column(Float)  # 流出占比
+    
+    # 流入板块
+    inflow_industry = Column(String(50), nullable=False, index=True)
+    inflow_amount = Column(Float)  # 流入金额（亿）
+    inflow_pct = Column(Float)  # 流入占比
+    
+    # 轮动信息
+    rotation_amount = Column(Float)  # 轮动金额（亿）
+    rotation_type = Column(String(16))  # strong/medium/weak
+    rotation_reason = Column(Text)  # 轮动原因分析
+    
+    # 龙头股信息
+    lead_stock_outflow = Column(String(20))  # 流出板块龙头股
+    lead_stock_outflow_name = Column(String(50))
+    lead_stock_inflow = Column(String(20))  # 流入板块龙头股
+    lead_stock_inflow_name = Column(String(50))
+    
+    # 更新时间
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    __table_args__ = (
+        Index('ix_rotation_analysis_date', 'analysis_date'),
+        Index('ix_rotation_outflow', 'outflow_industry'),
+        Index('ix_rotation_inflow', 'inflow_industry'),
+    )
+    
+    def __repr__(self):
+        return f"<IndustryRotation(outflow={self.outflow_industry}, inflow={self.inflow_industry}, amount={self.rotation_amount})>"
+
+
+class IndustryLeadStocks(Base):
+    """
+    板块龙头股信息模型
+    
+    记录每个板块的龙头股信息，支持筛选功能
+    """
+    __tablename__ = 'industry_lead_stocks'
+    
+    # 主键
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # 板块名称
+    industry_name = Column(String(50), nullable=False, index=True)
+    
+    # 股票信息
+    stock_code = Column(String(10), nullable=False, index=True)
+    stock_name = Column(String(50))
+    
+    # 排名信息
+    rank = Column(Integer)  # 板块内排名
+    
+    # 市值和涨跌幅
+    market_cap = Column(Float)  # 市值（亿）
+    pct_change = Column(Float)  # 涨跌幅（%）
+    
+    # 资金流向
+    net_amount = Column(Float)  # 资金净流入（万）
+    
+    # 是否为龙头股
+    is_lead = Column(Boolean, default=False)  # 是否为龙头股
+    
+    # 更新日期
+    update_date = Column(Date, nullable=False, index=True)
+    
+    # 更新时间
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # 唯一约束：同一板块同一股票同一日期只能有一条数据
+    __table_args__ = (
+        UniqueConstraint('industry_name', 'stock_code', 'update_date', name='uix_industry_stock_date'),
+        Index('ix_industry_lead', 'industry_name', 'is_lead'),
+    )
+    
+    def __repr__(self):
+        return f"<IndustryLeadStocks(industry={self.industry_name}, stock={self.stock_code}, is_lead={self.is_lead})>"
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式

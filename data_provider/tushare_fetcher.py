@@ -1179,12 +1179,17 @@ class TushareFetcher(BaseFetcher):
                     'net_buy_amount': row.get('net_buy_amount', 0),  # Inflow (billion CNY)
                     'net_sell_amount': row.get('net_sell_amount', 0),  # Outflow (billion CNY)
                     'net_amount': row.get('net_amount', 0),  # Net amount (billion CNY)
-                    'lead_stock': row.get('lead_stock', ''),  # Leading stock
-                    'pct_change_stock': row.get('pct_change_stock', 0)  # Leading stock change
+                    'lead_stock': '',  # Stock code (not provided by API)
+                    'lead_stock_name': row.get('lead_stock', ''),  # Leading stock name (API returns name, not code)
+                    'lead_stock_change': row.get('pct_change_stock', 0)  # Leading stock change percentage
                 })
             
-            # Sort by net amount (descending)
+            # Sort by net amount (descending) and add rank
             industries = sorted(industries, key=lambda x: x['net_amount'], reverse=True)
+            
+            # Add rank based on sorted order
+            for i, ind in enumerate(industries, 1):
+                ind['rank'] = i
             
             result = {
                 'trade_date': trade_date or today,

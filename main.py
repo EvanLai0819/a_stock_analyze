@@ -195,6 +195,85 @@ def parse_arguments() -> argparse.Namespace:
         help='强制回测（即使已有回测结果也重新计算）'
     )
 
+    # === Industry Moneyflow Tracker ===
+    parser.add_argument(
+        '--industry-moneyflow',
+        action='store_true',
+        help='启用板块资金流向追踪功能'
+    )
+
+    parser.add_argument(
+        '--industry-save',
+        action='store_true',
+        help='保存今日板块资金流向数据'
+    )
+
+    parser.add_argument(
+        '--industry-top',
+        type=int,
+        default=10,
+        help='获取Top N板块排名（默认10）'
+    )
+
+    parser.add_argument(
+        '--industry-alerts',
+        action='store_true',
+        help='检测板块资金流向预警'
+    )
+
+    parser.add_argument(
+        '--industry-lead-stocks',
+        action='store_true',
+        help='筛选连续流入板块的龙头股'
+    )
+
+    parser.add_argument(
+        '--industry-rotation',
+        action='store_true',
+        help='分析板块轮动'
+    )
+
+    parser.add_argument(
+        '--industry-history',
+        type=str,
+        default=None,
+        help='获取指定板块的资金流向历史（板块名称）'
+    )
+
+    parser.add_argument(
+        '--industry-days',
+        type=int,
+        default=5,
+        help='板块资金流向历史天数（默认5）'
+    )
+
+    parser.add_argument(
+        '--industry-min-days',
+        type=int,
+        default=3,
+        help='板块资金连续流入/流出最小天数（默认3）'
+    )
+
+    parser.add_argument(
+        '--industry-threshold',
+        type=float,
+        default=5.0,
+        help='板块资金流向金额阈值（亿，默认5.0）'
+    )
+
+    parser.add_argument(
+        '--industry-report',
+        action='store_true',
+        help='生成板块资金流向MD报告并发送邮件'
+    )
+
+    parser.add_argument(
+        '--industry-top-limit',
+        type=int,
+        default=10,
+        help='板块报告中Top板块数量（默认10）'
+    )
+
     return parser.parse_args()
 
 
@@ -388,6 +467,148 @@ def start_bot_stream_clients(config: Config) -> None:
             logger.error(f"[Main] Failed to start Feishu Stream client: {exc}")
 
 
+def run_industry_moneyflow_analysis(args: argparse.Namespace):
+    """
+    执行板块资金流向追踪分析
+    
+    Args:
+        args: 命令行参数
+    """
+    from src.industry_moneyflow_tracker import IndustryMoneyflowTracker
+    from src.industry_moneyflow_reporter import IndustryMoneyflowReporter
+    from src.notification import NotificationService
+    
+    logger.info("=" * 60)
+    logger.info("板块资金流向追踪系统 启动")
+    logger.info("=" * 60)
+    
+    # 如果需要生成报告，使用reporter
+    if getattr(args, 'industry_report', False):
+        logger.info("生成板块资金流向MD报告并发送邮件...")
+        
+        reporter = IndustryMoneyflowReporter()
+        
+        # 生成报告
+        top_limit = getattr(args, 'industry_top_limit', 10)
+        report_path = reporter.generate_report(top_limit=top_limit)
+        
+        if report_path:
+            logger.info(f"✅ 报告生成成功: {report_path}")
+            
+            # 发送邮件
+            email_success = reporter.send_email_report(report_path)
+            
+            if email_success:
+                logger.info("✅ 邮件发送成功")
+            else:
+                logger.warning("⚠️ 邮件发送失败，请检查邮件配置")
+            
+            logger.info("=" * 60)
+            logger.info("板块资金流向报告生成和邮件发送完成")
+            logger.info("=" * 60)
+            return
+        else:
+            logger.error("❌ 报告生成失败")
+            return
+    
+    # 否则使用tracker进行常规分析
+    tracker = IndustryMoneyflowTracker()
+    notifier = NotificationService()
+    
+    # 1. 保存今日板块资金流向数据
+    if args.industry_save or args.industry_moneyflow:
+        logger.info("保存今日板块资金流向数据...")
+        result = tracker.save_daily_moneyflow()
+        if result['success']:
+            logger.info(f"✅ 保存成功: {result['saved_count']} 个板块")
+        else:
+            logger.warning(f"⚠️ 保存失败: {result['message']}")
+    
+    # 2. 获取Top N板块排名
+    if args.industry_top > 0 or args.industry_moneyflow:
+        logger.info(f"获取Top {args.industry_top} 板块排名...")
+        
+        # Top流入板块
+        top_inflow = tracker.get_top_industries(limit=args.industry_top, direction='inflow')
+        logger.info(f"\nTop {args.industry_top} 资金流入板块:")
+        for i, ind in enumerate(top_inflow, 1):
+            logger.info(f"  {i}. {ind['industry_name']}: 净流入={ind['net_amount']:.2f}亿, "
+                       f"涨跌={ind['pct_change']:.2f}%, 龙头={ind.get('lead_stock_name', '未知')}")
+        
+        # Top流出板块
+        top_outflow = tracker.get_top_industries(limit=args.industry_top, direction='outflow')
+        logger.info(f"\nTop {args.industry_top} 资金流出板块:")
+        for i, ind in enumerate(top_outflow, 1):
+            logger.info(f"  {i}. {ind['industry_name']}: 净流出={abs(ind['net_amount']):.2f}亿, "
+                       f"涨跌={ind['pct_change']:.2f}%, 龙头={ind.get('lead_stock_name', '未知')}")
+    
+    # 3. 获取板块资金流向历史
+    if args.industry_history:
+        logger.info(f"获取板块 {args.industry_history} 最近 {args.industry_days} 天的资金流向历史...")
+        history = tracker.get_industry_moneyflow_history(args.industry_history, days=args.industry_days)
+        
+        logger.info(f"\n{args.industry_history}板块资金流向历史:")
+        for record in history:
+            logger.info(f"  - {record['trade_date']}: 净流入={record['net_amount']:.2f}亿, "
+                       f"涨跌={record['pct_change']:.2f}%, 排名={record['rank']}")
+        
+        # 获取排名变化
+        rank_result = tracker.get_industry_ranking_changes(args.industry_history, days=args.industry_days)
+        logger.info(f"\n排名变化分析:")
+        if 'message' in rank_result:
+            logger.info(f"  - {rank_result['message']}")
+        else:
+            logger.info(f"  - 当前排名: 第{rank_result['current_rank']}名")
+            logger.info(f"  - 排名变化: {rank_result['rank_change']}位 ({rank_result['trend']})")
+    
+    # 4. 检测板块资金流向预警
+    if args.industry_alerts or args.industry_moneyflow:
+        logger.info(f"检测板块资金流向预警（连续{args.industry_min_days}天，金额{args.industry_threshold}亿）...")
+        alerts = tracker.detect_moneyflow_alerts(min_days=args.industry_min_days, threshold_amount=args.industry_threshold)
+        
+        logger.info(f"\n检测到 {len(alerts)} 个板块资金流向预警:")
+        for alert in alerts:
+            logger.info(f"\n板块: {alert['industry_name']}")
+            logger.info(f"  - 类型: {alert['alert_type']}")
+            logger.info(f"  - 级别: {alert['alert_level']}")
+            logger.info(f"  - 连续天数: {alert['consecutive_days']}")
+            logger.info(f"  - 累计金额: {alert['total_amount']:.2f}亿")
+            logger.info(f"  - 建议: {alert['recommendation']}")
+    
+    # 5. 筛选连续流入板块的龙头股
+    if args.industry_lead_stocks or args.industry_moneyflow:
+        logger.info(f"筛选连续{args.industry_min_days}天流入板块的龙头股...")
+        lead_stocks = tracker.get_lead_stocks_in_continuous_inflow_industries(
+            min_days=args.industry_min_days,
+            threshold_amount=args.industry_threshold
+        )
+        
+        logger.info(f"\n筛选到 {len(lead_stocks)} 个龙头股:")
+        for stock in lead_stocks:
+            logger.info(f"\n股票: {stock['stock_name']} ({stock['stock_code']})")
+            logger.info(f"  - 所属板块: {stock['industry_name']}")
+            logger.info(f"  - 连续流入天数: {stock['consecutive_days']}")
+            logger.info(f"  - 累计流入金额: {stock['total_inflow']:.2f}亿")
+            logger.info(f"  - 操作建议: {stock['recommendation']}")
+    
+    # 6. 分析板块轮动
+    if args.industry_rotation or args.industry_moneyflow:
+        logger.info(f"分析板块轮动...")
+        rotations = tracker.analyze_industry_rotation(threshold_amount=args.industry_threshold)
+        
+        logger.info(f"\n分析到 {len(rotations)} 个板块轮动:")
+        for rotation in rotations:
+            logger.info(f"\n资金轮动: {rotation['outflow_industry']} → {rotation['inflow_industry']}")
+            logger.info(f"  - 流出金额: {rotation['outflow_amount']:.2f}亿")
+            logger.info(f"  - 流入金额: {rotation['inflow_amount']:.2f}亿")
+            logger.info(f"  - 轮动强度: {rotation['rotation_type']}")
+            logger.info(f"  - 轮动原因: {rotation['rotation_reason']}")
+    
+    logger.info("=" * 60)
+    logger.info("板块资金流向追踪分析完成")
+    logger.info("=" * 60)
+
+
 def main() -> int:
     """
     主入口函数
@@ -466,7 +687,19 @@ def main() -> int:
         return 0
 
     try:
-        # 模式0: 回测
+        # 模式0: 板块资金流向追踪
+        if getattr(args, 'industry_moneyflow', False) or \
+           getattr(args, 'industry_save', False) or \
+           getattr(args, 'industry_alerts', False) or \
+           getattr(args, 'industry_lead_stocks', False) or \
+           getattr(args, 'industry_rotation', False) or \
+           getattr(args, 'industry_report', False) or \
+           getattr(args, 'industry_history', None):
+            logger.info("模式: 板块资金流向追踪")
+            run_industry_moneyflow_analysis(args)
+            return 0
+
+        # 模式1: 回测
         if getattr(args, 'backtest', False):
             logger.info("模式: 回测")
             from src.services.backtest_service import BacktestService

@@ -1718,7 +1718,7 @@ class AkshareFetcher(BaseFetcher):
         
         return None
     
-    def get_industry_moneyflow(self, industry_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_industry_moneyflow(self, industry_name: Optional[str] = None, trade_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get industry/sector money flow data (行业资金流向).
         
@@ -1726,6 +1726,7 @@ class AkshareFetcher(BaseFetcher):
         
         Args:
             industry_name: Industry name (e.g., '化学制药'), if None, get all industries
+            trade_date: Trade date (YYYYMMDD), if None, get the latest (akshare doesn't support historical date)
             
         Returns:
             Dict with keys:
